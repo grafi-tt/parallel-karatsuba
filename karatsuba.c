@@ -254,6 +254,7 @@ void karatsuba_mult(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restri
 	if (!l || l&(l-1)) return;
 	if (l <= STANDARD_THRESHOLD) {
 		standard_mult(r, x, y, l);
+		return;
 	}
 #pragma omp parallel
 #pragma omp single nowait
