@@ -46,24 +46,24 @@ static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_
 #define SMA_UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56)
 
 #define SMA_KERNEL(j) \
-	"movq rax, [%2+"#j"]\n\t" /* rax = y[i] */ \
-	"mulq rbx\n\t" /* rdx:rax = x[i]*y[i] */ \
-	"addq rax, rcx\n\t" /* rax += rcx */ \
-	"adcq rdx, 0\n\t" /* rdx += carry */ \
-	"addq [%0+"#j"], rax\n\t" /* r[j] += rax */ \
-	"adcq rdx, 0\n\t" /* rdx += carry */ \
-	"movq rcx, rdx\n\t" /* rcx = rdx */ \
+	"movq "#j"(%2), %%rax\n\t" /* rax = y[i] */ \
+	"mulq %%rbx\n\t" /* rdx:rax = x[i]*y[i] */ \
+	"addq %%rcx, %%rax\n\t" /* rax += rcx */ \
+	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
+	"addq %%rax, "#j"(%0)\n\t" /* r[j] += rax */ \
+	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
+	"movq %%rdx, %%rcx\n\t" /* rcx = rdx */ \
 
 	__asm__ __volatile__(
-		"movq r8, 8\n\t" /* cnt = 8 */
+		"movq $8, %%r8\n\t" /* cnt = 8 */
 		"SMA_LOOP:\n\t"
-		"xorq rcx, rcx\n\t" /* rcx = 0 */
-		"movq rbx, [%1]\n\t" /* rbx = x[i] */
+		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
+		"movq (%1), %%rbx\n\t" /* rbx = x[i] */
 		SMA_UNROLL(SMA_KERNEL)
-		"movq [%0+64], rcx\n\t" /* r[i+8] = rcx */
-		"leaq %0, [%0+8]\n\t" /* r++ */
-		"leaq %1, [%1+8]\n\t" /* x++ */
-		"subq r8, 1\n\t" /* cnt-- */
+		"movq %%rcx, 64(%0)\n\t" /* r[i+8] = rcx */
+		"leaq 8(%0), %0\n\t" /* r++ */
+		"leaq 8(%1), %1\n\t" /* x++ */
+		"subq $1, %%r8\n\t" /* cnt-- */
 		"jnz SMA_LOOP\n\t"
 	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "rbx", "rcx", "rdx", "r8");
 }
