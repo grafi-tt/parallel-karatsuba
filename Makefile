@@ -1,7 +1,7 @@
 ifeq ($(CC), icc)
 CFLAGS = -fast -openmp -std=c99
 else
-CFLAGS = -O2 -march=native -mtune=native -fopenmp -std=c99 -Wall -Wextra -pedantic
+CFLAGS = -O2 -march=native -mtune=native -fopenmp -std=c99 -Wall -Wextra -pedantic -masm=intel
 endif
 
 all: test bench

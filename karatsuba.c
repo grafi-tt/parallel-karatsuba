@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,15 +15,57 @@
 static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y,  size_t l) {
 	for (size_t j = 0; j < l; j++) r[j] = 0;
 	for (size_t i = 0; i < l; i++) {
-		uint64_t h = 0;
+		uint64_t c = 0;
 		for (size_t j = 0; j < l; j++) {
-			uint64_t o = r[i+j], p = r[i+j] + h;
+			uint64_t vl, vh;
+#ifdef __INTEL_COMPILER
+			__asm__("mulq %3": "=a"(vl), "=d"(vh) : "a"(x[i]), "g"(y[j]));
+#else
 			__uint128_t v = (__uint128_t)x[i] * (__uint128_t)y[j];
-			r[i+j] = p + (uint64_t)v;
-			h = (uint64_t)(v>>64) + (p < o) + (r[i+j] < p);
+			vl = (uint64_t)v, vh = (uint64_t)(v>>64);
+#endif
+			vl += c;
+			vh += vl < c;
+			r[i+j] += vl;
+			vh += r[i+j] < vl;
+			c = vh;
 		}
-		r[i+l] = h;
+		r[i+l] = c;
 	}
+}
+
+/*
+ * x*y
+ * #x = #y = 8
+ * elementary school algorithm
+ */
+static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
+	assert(STANDARD_THRESHOLD == 8);
+	for (size_t j = 0; j < 8; j++) r[j] = 0;
+
+#define SMA_UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56)
+
+#define SMA_KERNEL(j) \
+	"movq rax, [%2+"#j"]\n\t" /* rax = y[i] */ \
+	"mulq rbx\n\t" /* rdx:rax = x[i]*y[i] */ \
+	"addq rax, rcx\n\t" /* rax += rcx */ \
+	"adcq rdx, 0\n\t" /* rdx += carry */ \
+	"addq [%0+"#j"], rax\n\t" /* r[j] += rax */ \
+	"adcq rdx, 0\n\t" /* rdx += carry */ \
+	"movq rcx, rdx\n\t" /* rcx = rdx */ \
+
+	__asm__ __volatile__(
+		"movq r8, 8\n\t" /* cnt = 8 */
+		"SMA_LOOP:\n\t"
+		"xorq rcx, rcx\n\t" /* rcx = 0 */
+		"movq rbx, [%1]\n\t" /* rbx = x[i] */
+		SMA_UNROLL(SMA_KERNEL)
+		"movq [%0+64], rcx\n\t" /* r[i+8] = rcx */
+		"leaq %0, [%0+8]\n\t" /* r++ */
+		"leaq %1, [%1+8]\n\t" /* x++ */
+		"subq r8, 1\n\t" /* cnt-- */
+		"jnz SMA_LOOP\n\t"
+	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "rbx", "rcx", "rdx", "r8");
 }
 
 /*
@@ -94,8 +137,9 @@ static unsigned int abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, ui
  */
 static void karatsuba_mult_sing_do(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l,
 		uint64_t *restrict t) {
-	if (l <= STANDARD_THRESHOLD) {
-		standard_mult(r, x, y, l);
+	if (l == STANDARD_THRESHOLD) {
+		standard_mult_asm(r, x, y);
+		//standard_mult(r, x, y, l);
 		return;
 	}
 	karatsuba_mult_sing_do(r, x, y, l/2, t+2*l);
@@ -208,6 +252,9 @@ static void karatsuba_mult_schd(uint64_t *restrict r, uint64_t *restrict x, uint
  */
 void karatsuba_mult(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 	if (!l || l&(l-1)) return;
+	if (l <= STANDARD_THRESHOLD) {
+		standard_mult(r, x, y, l);
+	}
 #pragma omp parallel
 #pragma omp single nowait
 	{

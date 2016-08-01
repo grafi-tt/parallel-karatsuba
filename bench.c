@@ -52,13 +52,11 @@ int main(int argc, char *argv[]) {
 	mpz_import(gmp_y, l, -1, sizeof(uint64_t), 0, 0, y);
 	mpz_mul(gmp_r, gmp_x, gmp_y);
 	mpz_export(mem, NULL, -1, sizeof(uint64_t), 0, 0, gmp_r);
-	if (memcmp(r, mem, l)) {
-		fputs("result error\n", stderr);
-		return 2;
-	}
+	int err = memcmp(r, mem, l);
 
 	unsigned int ms = (tp2.tv_sec - tp1.tv_sec) * 1000 +
 		(tp2.tv_nsec - tp1.tv_nsec + 1000*1000*1000) / (1000*1000) - 1000;
 	printf("%ums\n", ms);
-	return 0;
+	if (err) fputs("result error\n", stderr);
+	return err;
 }
