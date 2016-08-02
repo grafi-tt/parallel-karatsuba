@@ -50,24 +50,24 @@ static void standard_mult_fixed(uint64_t *restrict r,uint64_t *restrict x, uint6
 	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r[j] = 0;
 #define SMA_KERNEL(j) \
 	"movq "#j"(%2), %%rax\n\t" /* rax = y[j] */ \
-	"mulq %%rbx\n\t" /* rdx:rax = rax * rbx */ \
+	"mulq %%r8\n\t" /* rdx:rax = rax * r8 */ \
 	"addq %%rcx, %%rax\n\t" /* rax += rcx */ \
-	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
+	"setc %%cl\n\t" \
+	"movzx %%cl, %%rcx\n\t" /* rcx = carry */ \
 	"addq %%rax, "#j"(%0)\n\t" /* r[j] += rax */ \
-	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
-	"movq %%rdx, %%rcx\n\t" /* rcx = rdx */
+	"adcq %%rdx, %%rcx\n\t" /* rcx += rdx + carry */
 	__asm__ __volatile__(
-		"movq $"ST", %%r8\n\t" /* cnt = STANDARD_THRESHOLD */
+		"mov $"ST", %%ebx\n\t" /* cnt = STANDARD_THRESHOLD */
 		"1:\n\t"
 		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
-		"movq (%1), %%rbx\n\t" /* rbx = *x */
+		"movq (%1), %%r8\n\t" /* r8 = *x */
 		UNROLL(SMA_KERNEL)
 		"movq %%rcx, "ST8"(%0)\n\t" /* r[STANDARD_THRESHOLD] = rcx */
 		"leaq 8(%0), %0\n\t" /* r++ */
 		"leaq 8(%1), %1\n\t" /* x++ */
-		"subq $1, %%r8\n\t" /* cnt-- */
+		"sub $1, %%ebx\n\t" /* cnt-- */
 		"jnz 1b\n\t" /* jmp if cnt != 0 */
-	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "rbx", "rcx", "rdx", "r8");
+	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "ebx", "rcx", "rdx", "r8");
 #else
 	standard_mult(r, x, y, STANDARD_THRESHOLD);
 #endif
