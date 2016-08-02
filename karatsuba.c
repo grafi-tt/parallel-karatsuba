@@ -45,40 +45,106 @@ static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *r
  * #x = #y = STANDARD_THRESHOLD is assumed
  * elementary school algorithm
  */
-static void standard_mult_fixed(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
+static void standard_mult_three_fixed(uint64_t *restrict r1, uint64_t *restrict x1, uint64_t *restrict y1,
+		uint64_t *restrict r2, uint64_t *restrict x2, uint64_t *restrict y2,
+		uint64_t *restrict r3, uint64_t *restrict x3, uint64_t *restrict y3) {
+	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r1[j] = 0;
+	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r2[j] = 0;
+	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r3[j] = 0;
 #ifdef ASM
-	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r[j] = 0;
+	int cnt = STANDARD_THRESHOLD;
 #define SMA_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" /* rax = y[j] */ \
-	"mulq %%r8\n\t" /* rdx:rax = rax * r8 */ \
-	"addq %%rcx, %%rax\n\t" /* rax += rcx */ \
-	"setc %%cl\n\t" \
-	"movzx %%cl, %%rcx\n\t" /* rcx = carry */ \
-	"addq %%rax, "#j"(%0)\n\t" /* r[j] += rax */ \
-	"adcq %%rdx, %%rcx\n\t" /* rcx += rdx + carry */
+	"movq "#j"(%2), %%rax\n\t" /* rax = y1[j] */ \
+	"mulq (%1)\n\t" /* rdx:rax = rax * r8 */ \
+	"addq %%r11, %%rax\n\t" /* rax += r11 */ \
+	"setc %%r11b\n\t" \
+	"movzx %%r11b, %%r11\n\t" /* r11 = carry */ \
+	"addq %%rax, "#j"(%0)\n\t" /* r1[j] += rax */ \
+	"adcq %%rdx, %%r11\n\t" /* r11 += rdx + carry */ \
+	\
+	"movq "#j"(%5), %%rax\n\t" /* rax = y2[j] */ \
+	"mulq (%4)\n\t" /* rdx:rax = rax * r9 */ \
+	"addq %%r12, %%rax\n\t" /* rax += r12 */ \
+	"setc %%r12b\n\t" \
+	"movzx %%r12b, %%r12\n\t" /* r12 = carry */ \
+	"addq %%rax, "#j"(%3)\n\t" /* r2[j] += rax */ \
+	"adcq %%rdx, %%r12\n\t" /* r12 += rdx + carry */ \
+	\
+	"movq "#j"(%8), %%rax\n\t" /* rax = y3[j] */ \
+	"mulq (%7)\n\t" /* rdx:rax = rax * r10 */ \
+	"addq %%r13, %%rax\n\t" /* rax += r12 */ \
+	"setc %%r13b\n\t" \
+	"movzx %%r13b, %%r13\n\t" /* r13 = carry */ \
+	"addq %%rax, "#j"(%6)\n\t" /* r3[j] += rax */ \
+	"adcq %%rdx, %%r13\n\t" /* r13 += rdx + carry */
+
 	__asm__ __volatile__(
-		"mov $"ST", %%ebx\n\t" /* cnt = STANDARD_THRESHOLD */
 		"1:\n\t"
-		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
-		"movq (%1), %%r8\n\t" /* r8 = *x */
+		"xorq %%r11, %%r11\n\t" /* r11 = 0 */
+		"xorq %%r12, %%r12\n\t" /* r12 = 0 */
+		"xorq %%r13, %%r13\n\t" /* r13 = 0 */
 		UNROLL(SMA_KERNEL)
-		"movq %%rcx, "ST8"(%0)\n\t" /* r[STANDARD_THRESHOLD] = rcx */
-		"leaq 8(%0), %0\n\t" /* r++ */
-		"leaq 8(%1), %1\n\t" /* x++ */
-		"sub $1, %%ebx\n\t" /* cnt-- */
+		"movq %%r11, "ST8"(%0)\n\t" /* r1[STANDARD_THRESHOLD] = r11 */
+		"movq %%r12, "ST8"(%3)\n\t" /* r2[STANDARD_THRESHOLD] = r12 */
+		"movq %%r13, "ST8"(%6)\n\t" /* r3[STANDARD_THRESHOLD] = r13 */
+		"leaq 8(%0), %0\n\t" /* r1++ */
+		"leaq 8(%1), %1\n\t" /* x1++ */
+		"leaq 8(%3), %3\n\t" /* r2++ */
+		"leaq 8(%4), %4\n\t" /* x2++ */
+		"leaq 8(%6), %6\n\t" /* r3++ */
+		"leaq 8(%7), %7\n\t" /* x3++ */
+		"sub $1, %9\n\t" /* cnt-- */
 		"jnz 1b\n\t" /* jmp if cnt != 0 */
-	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "ebx", "rcx", "rdx", "r8");
+	: "+r"(r1), "+r"(x1), "+r"(y1), "+r"(r2), "+r"(x2), "+r"(y2), "+r"(r3), "+r"(x3), "+r"(y3), "+g"(cnt)
+	:
+	: "memory", "rax", "rdx", "r11", "r12", "r13");
+
 #else
-	standard_mult(r, x, y, STANDARD_THRESHOLD);
+	for (size_t i = 0; i < STANDARD_THRESHOLD; i++) {
+		uint64_t c1 = 0, c2 = 0, c3 = 0;
+		for (size_t j = 0; j < STANDARD_THRESHOLD; j++) {
+			uint64_t vl1, vh1, vl2, vh2, vl3, vh3;
+#ifdef __INTEL_COMPILER
+			__asm__("mulq %3": "=a"(vl1), "=d"(vh1) : "a"(x1[i]), "g"(y1[j]));
+			__asm__("mulq %3": "=a"(vl2), "=d"(vh2) : "a"(x2[i]), "g"(y2[j]));
+			__asm__("mulq %3": "=a"(vl3), "=d"(vh3) : "a"(x3[i]), "g"(y3[j]));
+#else
+			__uint128_t v1 = (__uint128_t)x1[i] * (__uint128_t)y1[j];
+			vl1 = (uint64_t)v1, vh1 = (uint64_t)(v1>>64);
+			__uint128_t v2 = (__uint128_t)x2[i] * (__uint128_t)y2[j];
+			vl2 = (uint64_t)v2, vh2 = (uint64_t)(v2>>64);
+			__uint128_t v3 = (__uint128_t)x3[i] * (__uint128_t)y3[j];
+			vl3 = (uint64_t)v3, vh3 = (uint64_t)(v3>>64);
+#endif
+			vl1 += c1;
+			vh1 += vl1 < c1;
+			r1[i+j] += vl1;
+			vh1 += r1[i+j] < vl1;
+			c1 = vh1;
+			vl2 += c2;
+			vh2 += vl2 < c2;
+			r2[i+j] += vl2;
+			vh2 += r2[i+j] < vl2;
+			c2 = vh2;
+			vl3 += c3;
+			vh3 += vl3 < c3;
+			r3[i+j] += vl3;
+			vh3 += r3[i+j] < vl3;
+			c3 = vh3;
+		}
+		r1[i+STANDARD_THRESHOLD] = c1;
+		r2[i+STANDARD_THRESHOLD] = c2;
+		r3[i+STANDARD_THRESHOLD] = c3;
+	}
 #endif
 }
 
 /*
  * x += y + z
- * l must satisfy #y = l
+ * l must satisfy #y = #z = l
  * the carry is propagated to higher bits of x
  */
-static void add_threeop(uint64_t *restrict x, uint64_t *restrict y, uint64_t *restrict z, size_t l) {
+static void add_threeop(uint64_t *x, uint64_t *y, uint64_t *z, size_t l) {
 	char cy, cz;
 	uint64_t o;
 #ifdef ASM
@@ -257,17 +323,17 @@ static char abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *
  */
 static void karatsuba_mult_sing_do(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l,
 		uint64_t *restrict t) {
-	if (l == STANDARD_THRESHOLD) {
-		standard_mult_fixed(r, x, y);
-		return;
-	}
-	karatsuba_mult_sing_do(r, x, y, l/2, t+2*l);
-	karatsuba_mult_sing_do(r+l, x+l/2, y+l/2, l/2, t+2*l);
-	memcpy(t, r, 2*l*sizeof(uint64_t));
-	add_threeop(r+l/2, t, t+l, l);
 	char s1 = abs_diff_sign(t, x, x+l/2, l/2);
 	char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
-	karatsuba_mult_sing_do(t+l, t, t+l/2, l/2, t+2*l);
+	if (l == 2*STANDARD_THRESHOLD) {
+		standard_mult_three_fixed(r, x, y, r+l, x+l/2, y+l/2, t+l, t, t+l/2);
+	} else {
+		karatsuba_mult_sing_do(r, x, y, l/2, t+2*l);
+		karatsuba_mult_sing_do(r+l, x+l/2, y+l/2, l/2, t+2*l);
+		karatsuba_mult_sing_do(t+l, t, t+l/2, l/2, t+2*l);
+	}
+	memcpy(t, r, l*sizeof(uint64_t));
+	add_threeop(r+l/2, t, r+l, l);
 	(s1^s2 ? add_twoop : sub_twoop)(r+l/2, t+l, l);
 }
 
@@ -308,9 +374,9 @@ static void karatsuba_mult_schd_add_cont(kmul_cont_t **argsp, char s, uint64_t *
  * the procedure after recursive calls
  */
 static void karatsuba_mult_schd_cont_proc(char s, uint64_t *restrict r, uint64_t *restrict t, size_t l) {
-	memcpy(t, r, 2*l*sizeof(uint64_t));
-	add_threeop(r+l/2, t, t+l, l);
-	(s ? add_twoop : sub_twoop)(r+l/2, t+2*l, l);
+	memcpy(t, r, l*sizeof(uint64_t));
+	add_threeop(r+l/2, t, r+l, l);
+	(s ? add_twoop : sub_twoop)(r+l/2, t+l, l);
 	free(t);
 }
 
@@ -350,12 +416,12 @@ static void karatsuba_mult_schd(uint64_t *restrict r, uint64_t *restrict x, uint
 #pragma omp task
 		karatsuba_mult_sing(r, x, y, l);
 	} else {
-		uint64_t *t = malloc(3*l*sizeof(uint64_t));
+		uint64_t *t = malloc(2*l*sizeof(uint64_t));
 		char s1 = abs_diff_sign(t, x, x+l/2, l/2);
 		char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
 		karatsuba_mult_schd(r, x, y, l/2, 3*pos, 3*free_deg, 3*deg, tnum, argsp);
 		karatsuba_mult_schd(r+l, x+l/2, y+l/2, l/2, 3*pos+1, 3*free_deg, 3*deg, tnum, argsp);
-		karatsuba_mult_schd(t+2*l, t, t+l/2, l/2, 3*pos+2, 3*free_deg, 3*deg, tnum, argsp);
+		karatsuba_mult_schd(t+l, t, t+l/2, l/2, 3*pos+2, 3*free_deg, 3*deg, tnum, argsp);
 		/* save the continuation and go ahead to the next node */
 		karatsuba_mult_schd_add_cont(argsp, s1^s2, r, t, l);
 	}
