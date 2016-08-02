@@ -40,32 +40,32 @@ static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *r
 }
 
 /*
- * x*y
- * #x = #y = 8
+ * r = x*y
+ * #x = #y = STANDARD_THRESHOLD is assumed
  * elementary school algorithm
  */
 static void standard_mult_fixed(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
 #ifdef ASM
 	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r[j] = 0;
 #define SMA_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" /* rax = y[i] */ \
-	"mulq %%rbx\n\t" /* rdx:rax = x[i]*y[i] */ \
+	"movq "#j"(%2), %%rax\n\t" /* rax = y[j] */ \
+	"mulq %%rbx\n\t" /* rdx:rax = rax * rbx */ \
 	"addq %%rcx, %%rax\n\t" /* rax += rcx */ \
 	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
 	"addq %%rax, "#j"(%0)\n\t" /* r[j] += rax */ \
 	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
 	"movq %%rdx, %%rcx\n\t" /* rcx = rdx */
 	__asm__ __volatile__(
-		"movq $"ST", %%r8\n\t" /* cnt = 8 */
-		"SMA_LOOP:\n\t"
+		"movq $"ST", %%r8\n\t" /* cnt = STANDARD_THRESHOLD */
+		"1:\n\t"
 		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
-		"movq (%1), %%rbx\n\t" /* rbx = x[i] */
+		"movq (%1), %%rbx\n\t" /* rbx = *x */
 		UNROLL(SMA_KERNEL)
-		"movq %%rcx, "ST8"(%0)\n\t" /* r[i+8] = rcx */
+		"movq %%rcx, "ST8"(%0)\n\t" /* r[STANDARD_THRESHOLD] = rcx */
 		"leaq 8(%0), %0\n\t" /* r++ */
 		"leaq 8(%1), %1\n\t" /* x++ */
 		"subq $1, %%r8\n\t" /* cnt-- */
-		"jnz SMA_LOOP\n\t"
+		"jnz 1b\n\t" /* jmp if cnt != 0 */
 	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "rbx", "rcx", "rdx", "r8");
 #else
 	standard_mult(r, x, y, STANDARD_THRESHOLD);
@@ -82,18 +82,18 @@ static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 #ifdef ASM
 	uint64_t *xorig = x;
 #define ATO_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" \
-	"adcq %%rax, "#j"(%1)\n\t"
+	"movq "#j"(%2), %%rax\n\t" /* rax = x[j] */ \
+	"adcq %%rax, "#j"(%1)\n\t" /* y[j] += rax + carry */
 	__asm__ __volatile__(
-		"xorb %0, %0\n\t"
+		"xorb %0, %0\n\t" /* c = 0, carry = 0 */
 		"1:\n\t"
-		"addb $-1, %0\n\t"
+		"addb $-1, %0\n\t" /* (c += 0xFF), carry = c */
 		UNROLL(ATO_KERNEL)
-		"leaq "ST8"(%1), %1\n\t"
-		"leaq "ST8"(%2), %2\n\t"
-		"setc %0\n\t"
+		"leaq "ST8"(%1), %1\n\t" /* x += STANDARD_THRESHOLD */
+		"leaq "ST8"(%2), %2\n\t" /* y += STANDARD_THRESHOLD */
+		"setc %0\n\t" /* c = carry */
 		"cmpq %3, %1\n\t"
-		"jl 1b\n\t"
+		"jl 1b\n\t" /* jmp if x < xorig+l */
 	: "=&a"(c), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
 	x = xorig;
 #else
@@ -119,18 +119,18 @@ static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 #ifdef ASM
 	uint64_t *xorig = x;
 #define STO_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" \
-	"sbbq %%rax, "#j"(%1)\n\t"
+	"movq "#j"(%2), %%rax\n\t" /* rax = x[j] */ \
+	"sbbq %%rax, "#j"(%1)\n\t" /* y[j] -= rax + borrow */
 	__asm__ __volatile__(
-		"xorb %0, %0\n\t"
+		"xorb %0, %0\n\t" /* b = 0, borrow = 0 */
 		"1:\n\t"
-		"addb $-1, %0\n\t"
+		"addb $-1, %0\n\t" /* (b += 0xFF), borrow = b */
 		UNROLL(STO_KERNEL)
-		"leaq "ST8"(%1), %1\n\t"
-		"leaq "ST8"(%2), %2\n\t"
-		"setc %0\n\t"
+		"leaq "ST8"(%1), %1\n\t" /* x += STANDARD_THRESHOLD */
+		"leaq "ST8"(%2), %2\n\t" /* y += STANDARD_THRESHOLD */
+		"setc %0\n\t" /* b = borrow */
 		"cmpq %3, %1\n\t"
-		"jl 1b\n\t"
+		"jl 1b\n\t" /* jmp if x < xorig+l */
 	: "=&a"(b), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
 	x = xorig;
 #else
