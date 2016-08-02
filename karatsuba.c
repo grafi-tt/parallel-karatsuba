@@ -6,6 +6,7 @@
 
 #define GRANULARITY 100
 #define STANDARD_THRESHOLD 8
+#define UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56)
 
 /*
  * r = x*y
@@ -40,10 +41,7 @@ static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *r
  * elementary school algorithm
  */
 static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
-	assert(STANDARD_THRESHOLD == 8);
-	for (size_t j = 0; j < 8; j++) r[j] = 0;
-
-#define SMA_UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56)
+	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r[j] = 0;
 
 #define SMA_KERNEL(j) \
 	"movq "#j"(%2), %%rax\n\t" /* rax = y[i] */ \
@@ -59,7 +57,7 @@ static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_
 		"SMA_LOOP:\n\t"
 		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
 		"movq (%1), %%rbx\n\t" /* rbx = x[i] */
-		SMA_UNROLL(SMA_KERNEL)
+		UNROLL(SMA_KERNEL)
 		"movq %%rcx, 64(%0)\n\t" /* r[i+8] = rcx */
 		"leaq 8(%0), %0\n\t" /* r++ */
 		"leaq 8(%1), %1\n\t" /* x++ */
@@ -74,12 +72,25 @@ static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_
  * the carry is propagated to higher bits of x
  */
 static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
-	unsigned int c = 0;
-	for (size_t i = 0; i < l; i++) {
-		uint64_t o = x[i];
-		x[i] += y[i] + c;
-		if (y[i] + c) c = x[i] < o;
-	}
+	char c;
+	uint64_t *xorig = x;
+#define ATO_KERNEL(j) \
+	"movq "#j"(%2), %%rax\n\t" \
+	"adcq %%rax, "#j"(%1)\n\t" \
+
+	__asm__ __volatile__(
+		"xorb %0, %0\n\t"
+		"1:\n\t"
+		"addb $-1, %0\n\t"
+		UNROLL(ATO_KERNEL)
+		"leaq 64(%1), %1\n\t"
+		"leaq 64(%2), %2\n\t"
+		"setc %0\n\t"
+		"cmpq %3, %1\n\t"
+		"jl 1b\n\t"
+	: "=&a"(c), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
+	x = xorig;
+
 	if (c) {
 		for (size_t i = l; ++x[i] == 0; i++);
 	}
@@ -91,12 +102,25 @@ static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
  * the borrow is propagated to higher bits of x
  */
 static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
-	unsigned int b = 0;
-	for (size_t i = 0; i < l; i++) {
-		uint64_t o = x[i];
-		x[i] -= y[i] + b;
-		if (y[i] + b) b = x[i] > o;
-	}
+	char b;
+	uint64_t *xorig = x;
+#define STO_KERNEL(j) \
+	"movq "#j"(%2), %%rax\n\t" \
+	"sbbq %%rax, "#j"(%1)\n\t" \
+
+	__asm__ __volatile__(
+		"xorb %0, %0\n\t"
+		"1:\n\t"
+		"addb $-1, %0\n\t"
+		UNROLL(STO_KERNEL)
+		"leaq 64(%1), %1\n\t"
+		"leaq 64(%2), %2\n\t"
+		"setc %0\n\t"
+		"cmpq %3, %1\n\t"
+		"jl 1b\n\t"
+	: "=&a"(b), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
+	x = xorig;
+
 	if (b) {
 		for (size_t i = l; x[i]-- == 0; i++);
 	}
@@ -107,18 +131,37 @@ static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
  * returns x>y
  * l must satisfy #x = #y = l
  */
-static unsigned int abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l) {
-	unsigned int b = 0;
-	for (size_t i = 0; i < l; i++) {
-		r[i] = x[i] - (y[i] + b);
-		if (y[i] + b) b = r[i] > x[i];
+static char abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l) {
+	char b = 0;
+	for (size_t i = l; i--; ) {
+		if (x[i] != y[i]) {
+			b = x[i] < y[i];
+			break;
+		}
 	}
 	if (b) {
-		size_t i = 0;
-		for ( ; r[i] == 0; i++);
-		r[i] = -r[i], i++;
-		for ( ; i < l; i++) r[i] = ~r[i];
+		uint64_t *restrict t = y;
+		y = x;
+		x = t;
 	}
+
+#define ADS_KERNEL(j) \
+	"movq "#j"(%1), %%rax\n\t" \
+	"sbbq "#j"(%2), %%rax\n\t" \
+	"movq %%rax, "#j"(%0)\n\t" \
+
+	__asm__ __volatile__(
+		"xorb %%al, %%al\n\t"
+		"1:\n\t"
+		"addb $-1, %%al\n\t"
+		UNROLL(ADS_KERNEL)
+		"leaq 64(%0), %0\n\t"
+		"leaq 64(%1), %1\n\t"
+		"leaq 64(%2), %2\n\t"
+		"setc %%al\n\t"
+		"cmpq %3, %0\n\t"
+		"jl 1b\n\t"
+	: "+r"(r), "+r"(x), "+r"(y) : "r"(r+l) : "memory", "rax");
 	return b;
 }
 
@@ -147,8 +190,8 @@ static void karatsuba_mult_sing_do(uint64_t *restrict r, uint64_t *restrict x, u
 	memcpy(t, r, 2*l*sizeof(uint64_t));
 	add_twoop(r+l/2, t, l);
 	add_twoop(r+l/2, t+l, l);
-	unsigned int s1 = abs_diff_sign(t, x, x+l/2, l/2);
-	unsigned int s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
+	char s1 = abs_diff_sign(t, x, x+l/2, l/2);
+	char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
 	karatsuba_mult_sing_do(t+l, t, t+l/2, l/2, t+2*l);
 	(s1^s2 ? add_twoop : sub_twoop)(r+l/2, t+l, l);
 }
@@ -166,7 +209,7 @@ static void karatsuba_mult_sing(uint64_t *restrict r, uint64_t *restrict x, uint
 }
 
 typedef struct kmul_cont {
-	int s;
+	char s;
 	uint64_t *r;
 	uint64_t *t;
 	size_t l;
@@ -176,7 +219,7 @@ typedef struct kmul_cont {
 /*
  * save (arguments of) a continuation
  */
-static void karatsuba_mult_schd_add_cont(kmul_cont_t **argsp, int s, uint64_t *r, uint64_t *t, size_t l) {
+static void karatsuba_mult_schd_add_cont(kmul_cont_t **argsp, char s, uint64_t *r, uint64_t *t, size_t l) {
 	kmul_cont_t *args = malloc(sizeof(kmul_cont_t));
 	args->s = s;
 	args->r = r;
@@ -189,7 +232,7 @@ static void karatsuba_mult_schd_add_cont(kmul_cont_t **argsp, int s, uint64_t *r
 /*
  * the procedure after recursive calls
  */
-static void karatsuba_mult_schd_cont_proc(int s, uint64_t *restrict r, uint64_t *restrict t, size_t l) {
+static void karatsuba_mult_schd_cont_proc(char s, uint64_t *restrict r, uint64_t *restrict t, size_t l) {
 	memcpy(t, r, 2*l*sizeof(uint64_t));
 	add_twoop(r+l/2, t, l);
 	add_twoop(r+l/2, t+l, l);
@@ -234,8 +277,8 @@ static void karatsuba_mult_schd(uint64_t *restrict r, uint64_t *restrict x, uint
 		karatsuba_mult_sing(r, x, y, l);
 	} else {
 		uint64_t *t = malloc(3*l*sizeof(uint64_t));
-		unsigned int s1 = abs_diff_sign(t, x, x+l/2, l/2);
-		unsigned int s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
+		char s1 = abs_diff_sign(t, x, x+l/2, l/2);
+		char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
 		karatsuba_mult_schd(r, x, y, l/2, 3*pos, 3*free_deg, 3*deg, tnum, argsp);
 		karatsuba_mult_schd(r+l, x+l/2, y+l/2, l/2, 3*pos+1, 3*free_deg+1, 3*deg, tnum, argsp);
 		karatsuba_mult_schd(t+2*l, t, t+l/2, l/2, 3*pos+2, 3*free_deg+2, 3*deg, tnum, argsp);
