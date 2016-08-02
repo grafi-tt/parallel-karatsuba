@@ -4,9 +4,10 @@
 #include <string.h>
 #include <omp.h>
 
-#define GRANULARITY 100
+/* thread granularity */
+#define GRANULARITY 8192
 
-/* chunk size */
+/* threshold to standard multiplication */
 #define STANDARD_THRESHOLD 8
 #define ST "8" /* "STANDARD_THRESHOLD" */
 #define ST8 "64" /* "STANDARD_THRESHOLD * 8" */
@@ -281,7 +282,7 @@ static void karatsuba_mult_schd_call_conts(kmul_cont_t *args) {
 static void karatsuba_mult_schd(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l,
 		int pos, int free_deg, int deg, int tnum, kmul_cont_t **argsp) {
 	int leaf = 0;
-	if (deg >= tnum * GRANULARITY || l <= STANDARD_THRESHOLD) {
+	if (l <= GRANULARITY) {
 		leaf = 1;
 	} else if (free_deg >= tnum) {
 		int border = free_deg / tnum * tnum;
