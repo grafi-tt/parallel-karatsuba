@@ -74,6 +74,56 @@ static void standard_mult_fixed(uint64_t *restrict r,uint64_t *restrict x, uint6
 }
 
 /*
+ * x += y + z
+ * l must satisfy #y = l
+ * the carry is propagated to higher bits of x
+ */
+static void add_threeop(uint64_t *restrict x, uint64_t *restrict y, uint64_t *restrict z, size_t l) {
+	char cy, cz;
+	uint64_t o;
+#ifdef ASM
+	uint64_t *xorig = x;
+#define ATH_KERNEL1(j) \
+	"movq "#j"(%3), %%rax\n\t" /* rax = y[j] */ \
+	"adcq %%rax, "#j"(%2)\n\t" /* x[j] += rax + carry */
+#define ATH_KERNEL2(j) \
+	"movq "#j"(%4), %%rbx\n\t" /* rbx = z[j] */ \
+	"adcq %%rbx, "#j"(%2)\n\t" /* x[j] += rbx + carry */
+	__asm__ __volatile__(
+		"xorb %0, %0\n\t" /* cx = 0 */
+		"xorb %1, %1\n\t" /* cy = 0 */
+		"1:\n\t"
+		"addb $-1, %0\n\t" /* (cx += 0xFF), carry = cx */
+		UNROLL(ATH_KERNEL1)
+		"setc %0\n\t" /* cx = carry */
+		"addb $-1, %1\n\t" /* (cy += 0xFF), carry = cy */
+		UNROLL(ATH_KERNEL2)
+		"setc %1\n\t" /* cy = carry */
+		"leaq "ST8"(%2), %2\n\t" /* x += STANDARD_THRESHOLD */
+		"leaq "ST8"(%3), %3\n\t" /* y += STANDARD_THRESHOLD */
+		"leaq "ST8"(%4), %4\n\t" /* z += STANDARD_THRESHOLD */
+		"cmpq %5, %2\n\t"
+		"jl 1b\n\t" /* jmp if x < xorig+l */
+	: "=&a"(cy), "=&b"(cz), "+&r"(x), "+&r"(y), "+&r"(z) : "r"(x+l) : "memory");
+	x = xorig;
+#else
+	cy = 0, cz = 0;
+	for (size_t i = 0; i < l; i++) {
+		o = x[i];
+		x[i] += y[i] + cy;
+		if (y[i] + cy) cy = x[i] < o;
+		o = x[i];
+		x[i] += z[i] + cz;
+		if (z[i] + cz) cz = x[i] < o;
+	}
+#endif
+	o = x[l];
+	if ((x[l] += cy + cz) < o) {
+		for (size_t i = l+1; ++x[i] == 0; i++);
+	}
+}
+
+/*
  * x += y
  * l must satisfy #y = l
  * the carry is propagated to higher bits of x
@@ -181,7 +231,7 @@ static char abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *
 		"setc %%al\n\t"
 		"cmpq %3, %0\n\t"
 		"jl 1b\n\t"
-	: "+r"(r), "+r"(x), "+r"(y) : "r"(r+l) : "memory", "rax");
+	: "+&r"(r), "+&r"(x), "+&r"(y) : "r"(r+l) : "memory", "rax");
 #else
 	char b = 0;
 	for (size_t i = 0; i < l; i++) {
@@ -214,8 +264,7 @@ static void karatsuba_mult_sing_do(uint64_t *restrict r, uint64_t *restrict x, u
 	karatsuba_mult_sing_do(r, x, y, l/2, t+2*l);
 	karatsuba_mult_sing_do(r+l, x+l/2, y+l/2, l/2, t+2*l);
 	memcpy(t, r, 2*l*sizeof(uint64_t));
-	add_twoop(r+l/2, t, l);
-	add_twoop(r+l/2, t+l, l);
+	add_threeop(r+l/2, t, t+l, l);
 	char s1 = abs_diff_sign(t, x, x+l/2, l/2);
 	char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
 	karatsuba_mult_sing_do(t+l, t, t+l/2, l/2, t+2*l);
@@ -260,8 +309,7 @@ static void karatsuba_mult_schd_add_cont(kmul_cont_t **argsp, char s, uint64_t *
  */
 static void karatsuba_mult_schd_cont_proc(char s, uint64_t *restrict r, uint64_t *restrict t, size_t l) {
 	memcpy(t, r, 2*l*sizeof(uint64_t));
-	add_twoop(r+l/2, t, l);
-	add_twoop(r+l/2, t+l, l);
+	add_threeop(r+l/2, t, t+l, l);
 	(s ? add_twoop : sub_twoop)(r+l/2, t+2*l, l);
 	free(t);
 }
