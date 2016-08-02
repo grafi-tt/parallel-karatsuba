@@ -5,8 +5,12 @@
 #include <omp.h>
 
 #define GRANULARITY 100
+
+/* chunk size */
 #define STANDARD_THRESHOLD 8
-#define UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56)
+#define ST "8" /* "STANDARD_THRESHOLD" */
+#define ST8 "64" /* "STANDARD_THRESHOLD * 8" */
+#define UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56) /* c(i*8) where i in STANDARD_THRESHOLD */
 
 /*
  * r = x*y
@@ -40,9 +44,9 @@ static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *r
  * #x = #y = 8
  * elementary school algorithm
  */
-static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
+static void standard_mult_fixed(uint64_t *restrict r,uint64_t *restrict x, uint64_t *restrict y) {
+#ifdef ASM
 	for (size_t j = 0; j < STANDARD_THRESHOLD; j++) r[j] = 0;
-
 #define SMA_KERNEL(j) \
 	"movq "#j"(%2), %%rax\n\t" /* rax = y[i] */ \
 	"mulq %%rbx\n\t" /* rdx:rax = x[i]*y[i] */ \
@@ -50,20 +54,22 @@ static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_
 	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
 	"addq %%rax, "#j"(%0)\n\t" /* r[j] += rax */ \
 	"adcq $0, %%rdx\n\t" /* rdx += carry */ \
-	"movq %%rdx, %%rcx\n\t" /* rcx = rdx */ \
-
+	"movq %%rdx, %%rcx\n\t" /* rcx = rdx */
 	__asm__ __volatile__(
-		"movq $8, %%r8\n\t" /* cnt = 8 */
+		"movq $"ST", %%r8\n\t" /* cnt = 8 */
 		"SMA_LOOP:\n\t"
 		"xorq %%rcx, %%rcx\n\t" /* rcx = 0 */
 		"movq (%1), %%rbx\n\t" /* rbx = x[i] */
 		UNROLL(SMA_KERNEL)
-		"movq %%rcx, 64(%0)\n\t" /* r[i+8] = rcx */
+		"movq %%rcx, "ST8"(%0)\n\t" /* r[i+8] = rcx */
 		"leaq 8(%0), %0\n\t" /* r++ */
 		"leaq 8(%1), %1\n\t" /* x++ */
 		"subq $1, %%r8\n\t" /* cnt-- */
 		"jnz SMA_LOOP\n\t"
 	: "+D"(r), "+r"(x), "+S"(y) : : "memory", "rax", "rbx", "rcx", "rdx", "r8");
+#else
+	standard_mult(r, x, y, STANDARD_THRESHOLD);
+#endif
 }
 
 /*
@@ -73,24 +79,31 @@ static void standard_mult_asm(uint64_t *restrict r,uint64_t *restrict x, uint64_
  */
 static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 	char c;
+#ifdef ASM
 	uint64_t *xorig = x;
 #define ATO_KERNEL(j) \
 	"movq "#j"(%2), %%rax\n\t" \
-	"adcq %%rax, "#j"(%1)\n\t" \
-
+	"adcq %%rax, "#j"(%1)\n\t"
 	__asm__ __volatile__(
 		"xorb %0, %0\n\t"
 		"1:\n\t"
 		"addb $-1, %0\n\t"
 		UNROLL(ATO_KERNEL)
-		"leaq 64(%1), %1\n\t"
-		"leaq 64(%2), %2\n\t"
+		"leaq "ST8"(%1), %1\n\t"
+		"leaq "ST8"(%2), %2\n\t"
 		"setc %0\n\t"
 		"cmpq %3, %1\n\t"
 		"jl 1b\n\t"
 	: "=&a"(c), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
 	x = xorig;
-
+#else
+	c = 0;
+	for (size_t i = 0; i < l; i++) {
+		uint64_t o = x[i];
+		x[i] += y[i] + c;
+		if (y[i] + c) c = x[i] < o;
+	}
+#endif
 	if (c) {
 		for (size_t i = l; ++x[i] == 0; i++);
 	}
@@ -103,24 +116,31 @@ static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
  */
 static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 	char b;
+#ifdef ASM
 	uint64_t *xorig = x;
 #define STO_KERNEL(j) \
 	"movq "#j"(%2), %%rax\n\t" \
-	"sbbq %%rax, "#j"(%1)\n\t" \
-
+	"sbbq %%rax, "#j"(%1)\n\t"
 	__asm__ __volatile__(
 		"xorb %0, %0\n\t"
 		"1:\n\t"
 		"addb $-1, %0\n\t"
 		UNROLL(STO_KERNEL)
-		"leaq 64(%1), %1\n\t"
-		"leaq 64(%2), %2\n\t"
+		"leaq "ST8"(%1), %1\n\t"
+		"leaq "ST8"(%2), %2\n\t"
 		"setc %0\n\t"
 		"cmpq %3, %1\n\t"
 		"jl 1b\n\t"
 	: "=&a"(b), "+&r"(x), "+&r"(y) : "r"(x+l) : "memory");
 	x = xorig;
-
+#else
+	b = 0;
+	for (size_t i = 0; i < l; i++) {
+		uint64_t o = x[i];
+		x[i] -= y[i] + b;
+		if (y[i] + b) b = x[i] > o;
+	}
+#endif
 	if (b) {
 		for (size_t i = l; x[i]-- == 0; i++);
 	}
@@ -132,37 +152,43 @@ static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
  * l must satisfy #x = #y = l
  */
 static char abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l) {
-	char b = 0;
+	char s = 0;
 	for (size_t i = l; i--; ) {
 		if (x[i] != y[i]) {
-			b = x[i] < y[i];
+			s = x[i] < y[i];
 			break;
 		}
 	}
-	if (b) {
+	if (s) {
 		uint64_t *restrict t = y;
 		y = x;
 		x = t;
 	}
-
+#ifdef ASM
 #define ADS_KERNEL(j) \
 	"movq "#j"(%1), %%rax\n\t" \
 	"sbbq "#j"(%2), %%rax\n\t" \
-	"movq %%rax, "#j"(%0)\n\t" \
-
+	"movq %%rax, "#j"(%0)\n\t"
 	__asm__ __volatile__(
 		"xorb %%al, %%al\n\t"
 		"1:\n\t"
 		"addb $-1, %%al\n\t"
 		UNROLL(ADS_KERNEL)
-		"leaq 64(%0), %0\n\t"
-		"leaq 64(%1), %1\n\t"
-		"leaq 64(%2), %2\n\t"
+		"leaq "ST8"(%0), %0\n\t"
+		"leaq "ST8"(%1), %1\n\t"
+		"leaq "ST8"(%2), %2\n\t"
 		"setc %%al\n\t"
 		"cmpq %3, %0\n\t"
 		"jl 1b\n\t"
 	: "+r"(r), "+r"(x), "+r"(y) : "r"(r+l) : "memory", "rax");
-	return b;
+#else
+	char b = 0;
+	for (size_t i = 0; i < l; i++) {
+		r[i] = x[i] - (y[i] + b);
+		if (y[i] + b) b = r[i] > x[i];
+	}
+#endif
+	return s;
 }
 
 /*
@@ -181,8 +207,7 @@ static char abs_diff_sign(uint64_t *restrict r, uint64_t *restrict x, uint64_t *
 static void karatsuba_mult_sing_do(uint64_t *restrict r, uint64_t *restrict x, uint64_t *restrict y, size_t l,
 		uint64_t *restrict t) {
 	if (l == STANDARD_THRESHOLD) {
-		standard_mult_asm(r, x, y);
-		//standard_mult(r, x, y, l);
+		standard_mult_fixed(r, x, y);
 		return;
 	}
 	karatsuba_mult_sing_do(r, x, y, l/2, t+2*l);

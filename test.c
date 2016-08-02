@@ -115,9 +115,11 @@ void test_karatsuba_mult(int tnum) {
 
 int main() {
 	test_standard_mult();
+#ifndef ASM
 	test_add_twoop();
 	test_sub_twoop();
 	test_abs_diff_sign();
+#endif
 	test_karatsuba_mult(0);
 	test_karatsuba_mult(1);
 	test_karatsuba_mult(2);
