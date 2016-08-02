@@ -306,8 +306,8 @@ static void karatsuba_mult_schd(uint64_t *restrict r, uint64_t *restrict x, uint
 		char s1 = abs_diff_sign(t, x, x+l/2, l/2);
 		char s2 = abs_diff_sign(t+l/2, y, y+l/2, l/2);
 		karatsuba_mult_schd(r, x, y, l/2, 3*pos, 3*free_deg, 3*deg, tnum, argsp);
-		karatsuba_mult_schd(r+l, x+l/2, y+l/2, l/2, 3*pos+1, 3*free_deg+1, 3*deg, tnum, argsp);
-		karatsuba_mult_schd(t+2*l, t, t+l/2, l/2, 3*pos+2, 3*free_deg+2, 3*deg, tnum, argsp);
+		karatsuba_mult_schd(r+l, x+l/2, y+l/2, l/2, 3*pos+1, 3*free_deg, 3*deg, tnum, argsp);
+		karatsuba_mult_schd(t+2*l, t, t+l/2, l/2, 3*pos+2, 3*free_deg, 3*deg, tnum, argsp);
 		/* save the continuation and go ahead to the next node */
 		karatsuba_mult_schd_add_cont(argsp, s1^s2, r, t, l);
 	}
