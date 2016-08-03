@@ -10,7 +10,7 @@
 /* threshold to standard multiplication */
 #define STANDARD_THRESHOLD 8
 #define ST "8" /* "STANDARD_THRESHOLD" */
-#define ST8 "64" /* "STANDARD_THRESHOLD * 8" */
+#define ST8 "64" /* "STANDARD_THRESHOLD*8" */
 #define UNROLL(c) c(0) c(8) c(16) c(24) c(32) c(40) c(48) c(56) /* c(i*8) where i in STANDARD_THRESHOLD */
 
 /*
@@ -41,7 +41,7 @@ static void standard_mult(uint64_t *restrict r,uint64_t *restrict x, uint64_t *r
 }
 
 /*
- * r = x*y
+ * r1 = x1*y1, r2 = x2*y2, r3 = x3*y3
  * #x = #y = STANDARD_THRESHOLD is assumed
  * elementary school algorithm
  */
@@ -199,8 +199,8 @@ static void add_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 #ifdef ASM
 	uint64_t *xorig = x;
 #define ATO_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" /* rax = x[j] */ \
-	"adcq %%rax, "#j"(%1)\n\t" /* y[j] += rax + carry */
+	"movq "#j"(%2), %%rax\n\t" /* rax = y[j] */ \
+	"adcq %%rax, "#j"(%1)\n\t" /* x[j] += rax + carry */
 	__asm__ __volatile__(
 		"xorb %0, %0\n\t" /* c = 0, carry = 0 */
 		"1:\n\t"
@@ -236,8 +236,8 @@ static void sub_twoop(uint64_t *restrict x, uint64_t *restrict y, size_t l) {
 #ifdef ASM
 	uint64_t *xorig = x;
 #define STO_KERNEL(j) \
-	"movq "#j"(%2), %%rax\n\t" /* rax = x[j] */ \
-	"sbbq %%rax, "#j"(%1)\n\t" /* y[j] -= rax + borrow */
+	"movq "#j"(%2), %%rax\n\t" /* rax = y[j] */ \
+	"sbbq %%rax, "#j"(%1)\n\t" /* x[j] -= rax + borrow */
 	__asm__ __volatile__(
 		"xorb %0, %0\n\t" /* b = 0, borrow = 0 */
 		"1:\n\t"
