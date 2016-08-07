@@ -22,10 +22,10 @@ uint64_t xorshift64(uint64_t x) {
 
 int main(int argc, char *argv[]) {
 	if (argc != 3) {
-		fputs("bench [len] [#threads]\n", stderr);
+		fputs("bench [#bits] [#processors]\n", stderr);
 		return 1;
 	}
-	size_t l = atol(argv[1]);
+	size_t l = atol(argv[1]) / sizeof(uint64_t) / 8;
 	int tnum = atoi(argv[2]);
 	if (tnum) omp_set_num_threads(tnum);
 
